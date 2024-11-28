@@ -13,6 +13,86 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// 监听快捷键命令
+chrome.commands.onCommand.addListener((command) => {
+  console.log("Command received:", command);
+
+  if (command === "copy-session-storage") {
+    console.log("🎯 通过快捷键触发复制操作");
+    chrome.tabs.query(
+      { active: true, currentWindow: true },
+      async function (tabs) {
+        if (!tabs[0]) {
+          console.error("❌ 没有找到活动标签页");
+          return;
+        }
+        await chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id, allFrames: true },
+          function: getSessionStorageData,
+        });
+        // 显示复制成功的toast
+        await showToastInAllFrames("数据复制成功！", "success");
+      }
+    );
+  } else if (command === "import-session-storage") {
+    console.log("🎯 通过快捷键触发导入操作");
+    chrome.tabs.query(
+      { active: true, currentWindow: true },
+      async function (tabs) {
+        if (!tabs[0]) {
+          showToastInAllFrames(tabs.length.toString(), "error");
+          console.error("❌ 没有找到活动标签页");
+          return;
+        }
+
+        // 从storage获取数据
+        chrome.storage.local.get(null, async function (result) {
+          console.log("📦 storage中的所有数据:", result);
+
+          const sessionStorageData = {};
+
+          // 收集所有相关的数据
+          Object.entries(result).forEach(([key, value]) => {
+            if (key === "sessionStorageData") {
+              // 合并主数据
+              Object.assign(sessionStorageData, value);
+            } else if (key.startsWith("sessionStorage_")) {
+              // 合并单独存储的数据
+              const url = key.replace("sessionStorage_", "");
+              sessionStorageData[url] = value;
+            }
+          });
+
+          if (Object.keys(sessionStorageData).length > 0) {
+            console.log("📦 准备导入的数据:", sessionStorageData);
+            try {
+              // 在所有frame中执行导入数据的脚本
+              const results = await chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id, allFrames: true },
+                function: importSessionStorageData,
+                args: [sessionStorageData],
+              });
+              console.log("📊 导入脚本执行结果:", results);
+              // 显示导入成功的toast
+              await showToastInAllFrames("数据导入成功！", "success");
+            } catch (e) {
+              console.error("❌ 执行导入脚本失败:", e);
+
+              await showToastInAllFrames(
+                "导入失败，请查看控制台了解详情",
+                "error"
+              );
+            }
+          } else {
+            console.log("⚠️ 没有找到要导入的数据");
+            await showToastInAllFrames("没有找到可导入的数据", "error");
+          }
+        });
+      }
+    );
+  }
+});
+
 // 获取当前frame的sessionStorage数据
 async function getSessionStorageData() {
   console.log("🚀 getSessionStorageData 开始执行");
@@ -139,7 +219,109 @@ async function importSessionStorageData(allData) {
 }
 
 let collectedData = {};
+// 在所有frame中显示toast
+async function showToastInAllFrames(message, type) {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tabs[0]) {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabs[0].id, allFrames: true },
+      function: (message, type) => {
+        // 直接定义并执行toast函数
+        function createToast(msg, toastType) {
+          // 移除已存在的toast
+          const existingToast = document.getElementById(
+            "chrome-storage-copier-toast"
+          );
+          if (existingToast) {
+            existingToast.remove();
+          }
 
+          // 创建toast容器
+          const toast = document.createElement("div");
+          toast.id = "chrome-storage-copier-toast";
+
+          // 设置基础样式
+          toast.style.cssText = `
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%) scale(0.8);
+            padding: 12px 20px;
+            min-width: 160px;
+            max-width: 60%;
+            background-color: ${
+              toastType === "success"
+                ? "#4caf50"
+                : toastType === "error"
+                ? "#f44336"
+                : "#2196f3"
+            };
+            color: white;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 10000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            text-align: center;
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          `;
+
+          // 添加图标
+          const icon = document.createElement("div");
+          icon.style.cssText = `
+            font-size: 20px;
+            margin-bottom: 4px;
+          `;
+          icon.textContent =
+            toastType === "success"
+              ? "✅"
+              : toastType === "error"
+              ? "❌"
+              : "ℹ️";
+          toast.appendChild(icon);
+
+          // 添加消息文本
+          const text = document.createElement("div");
+          text.style.cssText = `
+            line-height: 1.4;
+            word-break: break-word;
+          `;
+          text.textContent = msg;
+          toast.appendChild(text);
+
+          // 添加到页面
+          document.body.appendChild(toast);
+
+          // 显示动画
+          requestAnimationFrame(() => {
+            toast.style.opacity = "1";
+            toast.style.transform = "translate(-50%, -50%) scale(1)";
+          });
+
+          // 3秒后隐藏
+          setTimeout(() => {
+            toast.style.opacity = "0";
+            toast.style.transform = "translate(-50%, -50%) scale(0.8)";
+            setTimeout(() => {
+              toast.remove();
+            }, 300);
+          }, 3000);
+        }
+
+        // 确保DOM已加载
+        if (document.readyState === "complete") {
+          createToast(message, type);
+        } else {
+          window.addEventListener("load", () => {
+            createToast(message, type);
+          });
+        }
+      },
+      args: [message, type],
+    });
+  }
+}
 // 处理右键菜单点击
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "copySessionStorage") {
@@ -154,8 +336,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         function: getSessionStorageData,
       });
       console.log("📊 脚本执行结果:", results);
+      // 显示复制成功的toast
+      await showToastInAllFrames("数据复制成功！", "success");
     } catch (e) {
       console.error("❌ 执行脚本失败:", e);
+      await showToastInAllFrames("复制失败，请查看控制台了解详情", "error");
     }
   } else if (info.menuItemId === "importSessionStorage") {
     console.log("🎯 触发导入操作");
@@ -187,11 +372,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
             args: [sessionStorageData],
           });
           console.log("📊 导入脚本执行结果:", results);
+          // 显示导入成功的toast
+          await showToastInAllFrames("数据导入成功！", "success");
         } catch (e) {
           console.error("❌ 执行导入脚本失败:", e);
+          await showToastInAllFrames("导入失败，请查看控制台了解详情", "error");
         }
       } else {
         console.log("⚠️ 没有找到要导入的数据");
+        await showToastInAllFrames("没有找到可导入的数据", "error");
       }
     });
   }
