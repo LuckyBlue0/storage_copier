@@ -42,43 +42,112 @@ document.addEventListener("DOMContentLoaded", async function () {
 })();`;
   }
 
+  // 全局变量，用于存储重试次数
+  let retryCount = 0;
+  const MAX_RETRIES = 3;
+  const RETRY_DELAY = 1000; // 1秒
+
+  // 检查扩展连接状态
+  function checkExtensionConnection() {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.getBackgroundPage((backgroundPage) => {
+          if (chrome.runtime.lastError || !backgroundPage) {
+            reject(new Error('Extension disconnected'));
+          } else {
+            resolve(true);
+          }
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  // 重新连接扩展
+  async function reconnectExtension() {
+    if (retryCount >= MAX_RETRIES) {
+      showToast('扩展连接失败，请刷新页面重试', 'error');
+      retryCount = 0;
+      return false;
+    }
+
+    retryCount++;
+    await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+  
+    try {
+      await checkExtensionConnection();
+      retryCount = 0;
+      return true;
+    } catch (error) {
+      console.log(`重连尝试 ${retryCount}/${MAX_RETRIES} 失败`);
+      return false;
+    }
+  }
+
+  // 带重试的执行函数
+  async function executeWithRetry(operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      console.error('操作失败:', error);
+      
+      if (error.message.includes('Extension context invalidated') || 
+          error.message.includes('Extension disconnected')) {
+        showToast('扩展连接已断开，正在重新连接...', 'warning');
+        
+        if (await reconnectExtension()) {
+          // 重新连接成功，重试操作
+          try {
+            return await operation();
+          } catch (retryError) {
+            throw retryError;
+          }
+        }
+      }
+      throw error;
+    }
+  }
+
   // 刷新数据的函数
   async function refreshStorageData() {
-    // 清空现有内容
-    storageList.innerHTML = "";
-
     try {
-      // 获取当前标签页
-      const [tab] = await chrome.tabs.query({
-        active: true,
-        currentWindow: true,
+      await executeWithRetry(async () => {
+        // 清空现有内容
+        storageList.innerHTML = "";
+
+        // 获取当前标签页
+        const [tab] = await chrome.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+
+        if (!tab) {
+          throw new Error("没有找到活动标签页");
+        }
+
+        // 创建会话存储部分的标题
+        const sessionTitle = document.createElement("h2");
+        sessionTitle.textContent = "会话存储数据";
+        storageList.appendChild(sessionTitle);
+
+        // 获取会话存储数据
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          function: getSessionStorageData,
+        });
+
+        // 显示会话存储数据
+        displaySessionStorageData(results, tab);
+
+        // 创建Cookie部分的标题
+        const cookieTitle = document.createElement("h2");
+        cookieTitle.textContent = "Cookie数据";
+        storageList.appendChild(cookieTitle);
+
+        // 获取和显示Cookie数据
+        await displayCookieData(tab);
       });
-
-      if (!tab) {
-        throw new Error("没有找到活动标签页");
-      }
-
-      // 创建会话存储部分的标题
-      const sessionTitle = document.createElement("h2");
-      sessionTitle.textContent = "会话存储数据";
-      storageList.appendChild(sessionTitle);
-
-      // 获取会话存储数据
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        function: getSessionStorageData,
-      });
-
-      // 显示会话存储数据
-      displaySessionStorageData(results, tab);
-
-      // 创建Cookie部分的标题
-      const cookieTitle = document.createElement("h2");
-      cookieTitle.textContent = "Cookie数据";
-      storageList.appendChild(cookieTitle);
-
-      // 获取和显示Cookie数据
-      await displayCookieData(tab);
     } catch (error) {
       console.error("刷新数据失败:", error);
       showStatus("刷新数据失败，请查看控制台了解详情", "error");
@@ -424,6 +493,19 @@ document.addEventListener("DOMContentLoaded", async function () {
       console.error("显示Cookie数据失败:", error);
       showStatus("显示Cookie数据失败，请查看控制台了解详情", "error");
     }
+  }
+
+  // 显示提示消息
+  function showToast(message, type = 'info') {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+
+    toast.textContent = message;
+    toast.className = `toast toast-${type} show`;
+
+    setTimeout(() => {
+      toast.className = toast.className.replace('show', '');
+    }, 3000);
   }
 
   // 添加刷新按钮事件监听器
