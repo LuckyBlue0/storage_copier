@@ -1,0 +1,1 @@
+(()=>{try{chrome.devtools.panels.create("Storage Copier",null,"panel.html",(function(e){console.log("Storage Copier panel created successfully")}))}catch(e){console.error("Failed to create Storage Copier panel:",e)}})();

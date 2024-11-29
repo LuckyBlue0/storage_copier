@@ -1,0 +1,10 @@
+{
+  "appName": {
+    "message": "会话存储复制器",
+    "description": "扩展的名称"
+  },
+  "appDesc": {
+    "message": "一键复制和导入会话存储数据，支持跨域操作和右键菜单快捷访问",
+    "description": "扩展的描述"
+  }
+}
