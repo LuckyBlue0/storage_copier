@@ -1,6 +1,6 @@
 console.log("Panel.js is loading...");
 
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener("DOMContentLoaded", async function () {
   console.log("DOM Content Loaded");
 
   const refreshBtn = document.getElementById("refresh");
@@ -14,34 +14,20 @@ document.addEventListener("DOMContentLoaded", function () {
 
   console.log("All elements found successfully");
 
-  function showStatus(message, isError = false) {
-    console.log("Status:", message, "Error:", isError);
+  function showStatus(message, type = "info") {
+    console.log("Status:", message, "Type:", type);
     statusDiv.textContent = message;
-    statusDiv.className = isError ? "error" : "success";
+    statusDiv.className = type;
     setTimeout(() => {
       statusDiv.textContent = "";
       statusDiv.className = "";
     }, 3000);
   }
 
-  function copyToClipboard(text) {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      document.execCommand("copy");
-      showStatus("复制成功！已生成可执行代码");
-    } catch (err) {
-      showStatus("复制失败：" + err, true);
-    }
-    document.body.removeChild(textarea);
-  }
-
-  function generateExecutableCode(data, origin) {
+  // 生成可执行代码
+  function generateExecutableCode(data, source) {
     return `
-// 会话存储数据导入脚本 - 来自 ${origin}
-// 在目标网站的开发者工具控制台中粘贴并执行此代码
+// 会话存储数据导入脚本 - 来自 ${source}
 (function() {
   const data = ${JSON.stringify(data, null, 2)};
   Object.entries(data).forEach(([key, value]) => {
@@ -56,419 +42,404 @@ document.addEventListener("DOMContentLoaded", function () {
 })();`;
   }
 
-  function executeCode(data, origin) {
-    const code = `
-      (function() {
-        try {
-          const data = ${JSON.stringify(data)};
-          Object.entries(data).forEach(([key, value]) => {
-            try {
-              sessionStorage.setItem(key, value);
-              console.log('✅ 成功设置:', key);
-            } catch(e) {
-              console.error('❌ 设置失败:', key, e);
-            }
-          });
-          console.log('🎉 导入完成！共导入 ' + Object.keys(data).length + ' 个项目');
-        } catch(e) {
-          console.error('❌ 执行失败:', e);
-        }
-      })();
-    `;
+  // 刷新数据的函数
+  async function refreshStorageData() {
+    // 清空现有内容
+    storageList.innerHTML = "";
 
-    chrome.devtools.inspectedWindow.eval(code, (result, exceptionInfo) => {
-      if (exceptionInfo) {
-        console.error("执行失败:", exceptionInfo);
-        showStatus("执行失败: " + exceptionInfo.value, true);
-        return;
+    try {
+      // 获取当前标签页
+      const [tab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+
+      if (!tab) {
+        throw new Error("没有找到活动标签页");
       }
-      showStatus("成功导入数据到 " + origin);
-    });
+
+      // 创建会话存储部分的标题
+      const sessionTitle = document.createElement("h2");
+      sessionTitle.textContent = "会话存储数据";
+      storageList.appendChild(sessionTitle);
+
+      // 获取会话存储数据
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        function: getSessionStorageData,
+      });
+
+      // 显示会话存储数据
+      displaySessionStorageData(results, tab);
+
+      // 创建Cookie部分的标题
+      const cookieTitle = document.createElement("h2");
+      cookieTitle.textContent = "Cookie数据";
+      storageList.appendChild(cookieTitle);
+
+      // 获取和显示Cookie数据
+      await displayCookieData(tab);
+    } catch (error) {
+      console.error("刷新数据失败:", error);
+      showStatus("刷新数据失败，请查看控制台了解详情", "error");
+    }
   }
 
-  function createStorageSection(origin, data) {
-    const section = document.createElement("div");
-    section.className = "storage-section";
-    section.style.marginBottom = "30px";
-    section.style.backgroundColor = "#fff";
-    section.style.borderRadius = "8px";
-    section.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
-    section.style.overflow = "hidden";
-
-    // 创建源信息头部
-    const header = document.createElement("div");
-    header.style.padding = "15px";
-    header.style.backgroundColor = "#e3f2fd";
-    header.style.borderBottom = "1px solid #bbdefb";
-    header.style.display = "flex";
-    header.style.justifyContent = "space-between";
-    header.style.alignItems = "center";
-
-    const originText = document.createElement("div");
-    originText.textContent = "源: " + origin;
-    originText.style.fontWeight = "bold";
-    originText.style.color = "#1976D2";
-
-    const copyAllButton = document.createElement("button");
-    copyAllButton.textContent = "复制此源所有数据";
-    copyAllButton.onclick = () => {
-      copyToClipboard(generateExecutableCode(data, origin));
-    };
-
-    const executeAllButton = document.createElement("button");
-    executeAllButton.textContent = "导入此源所有数据";
-    executeAllButton.style.marginLeft = "5px";
-    executeAllButton.style.backgroundColor = "#4CAF50";
-    executeAllButton.onclick = () => {
-      executeCode(data, origin);
-    };
-
-    header.appendChild(originText);
-    header.appendChild(copyAllButton);
-    header.appendChild(executeAllButton);
-    section.appendChild(header);
-
-    // 创建数据内容区域
-    const content = document.createElement("div");
-    content.style.padding = "15px";
-
-    if (Object.keys(data).length === 0) {
-      const emptyMsg = document.createElement("div");
-      emptyMsg.style.padding = "10px";
-      emptyMsg.style.color = "#666";
-      emptyMsg.textContent = "此源没有会话存储数据";
-      content.appendChild(emptyMsg);
-    } else {
-      Object.entries(data).forEach(([key, value]) => {
-        const item = document.createElement("div");
-        item.style.margin = "10px 0";
-        item.style.padding = "10px";
-        item.style.border = "1px solid #ddd";
-        item.style.borderRadius = "4px";
-        item.style.backgroundColor = "#f8f8f8";
-
-        const keySpan = document.createElement("span");
-        keySpan.textContent = key;
-        keySpan.style.fontWeight = "bold";
-        keySpan.style.color = "#2196F3";
-
-        const valueSpan = document.createElement("span");
-        valueSpan.textContent = ": " + value;
-
-        const copyKeyButton = document.createElement("button");
-        copyKeyButton.textContent = "复制键名";
-        copyKeyButton.style.float = "right";
-        copyKeyButton.style.marginLeft = "5px";
-        copyKeyButton.onclick = () => {
-          copyToClipboard(key);
-        };
-
-        const copyValueButton = document.createElement("button");
-        copyValueButton.textContent = "复制值";
-        copyValueButton.style.float = "right";
-        copyValueButton.style.marginLeft = "5px";
-        copyValueButton.onclick = () => {
-          copyToClipboard(value);
-        };
-
-        const copyBothButton = document.createElement("button");
-        copyBothButton.textContent = "复制为代码";
-        copyBothButton.style.float = "right";
-        copyBothButton.onclick = () => {
-          const singleItemData = { [key]: value };
-          copyToClipboard(generateExecutableCode(singleItemData, origin));
-        };
-
-        const executeButton = document.createElement("button");
-        executeButton.textContent = "直接导入";
-        executeButton.style.float = "right";
-        executeButton.style.marginRight = "5px";
-        executeButton.style.backgroundColor = "#4CAF50";
-        executeButton.onclick = () => {
-          const singleItemData = { [key]: value };
-          executeCode(singleItemData, origin);
-        };
-
-        item.appendChild(keySpan);
-        item.appendChild(valueSpan);
-        item.appendChild(copyKeyButton);
-        item.appendChild(copyValueButton);
-        item.appendChild(copyBothButton);
-        item.appendChild(executeButton);
-        content.appendChild(item);
-      });
+  // 显示会话存储数据的函数
+  function displaySessionStorageData(results, tab) {
+    if (!results || results.length === 0) {
+      const noDataDiv = document.createElement("div");
+      noDataDiv.textContent = "没有会话存储数据";
+      storageList.appendChild(noDataDiv);
+      return;
     }
 
-    section.appendChild(content);
-    return section;
-  }
+    // 用于存储所有数据的对象
+    const allStorageData = {};
 
-  function refreshStorageData() {
-    console.log("Refreshing storage data...");
-
-    // 创建要注入到iframe的脚本
-    const iframeScript = `
-      (function() {
-        try {
-          console.log("Running in iframe context");
-          console.log("Current URL:", window.location.href);
-          console.log("Current origin:", window.location.origin);
-          
-          // 尝试访问sessionStorage
-          console.log("SessionStorage available:", !!window.sessionStorage);
-          console.log("SessionStorage length:", window.sessionStorage ? window.sessionStorage.length : 0);
-          
-          const data = {};
-          const storage = window.sessionStorage;
-          
-          if (storage) {
-            // 列出所有的键
-            const keys = [];
-            for (let i = 0; i < storage.length; i++) {
-              keys.push(storage.key(i));
-            }
-            console.log("Available keys:", keys);
-            
-            // 获取所有值
-            for (let i = 0; i < storage.length; i++) {
-              const key = storage.key(i);
-              try {
-                data[key] = storage.getItem(key);
-                console.log("Got value for key:", key);
-              } catch (e) {
-                console.error("Error getting value for key:", key, e);
-              }
-            }
-          }
-          
-          const result = {
-            origin: window.location.origin,
-            href: window.location.href,
-            data: data
-          };
-          console.log("Returning result:", result);
-          return result;
-        } catch(e) {
-          console.error("Error in iframe script:", e);
-          return {
-            error: e.message,
-            origin: window.location.origin,
-            href: window.location.href,
-            data: {}
-          };
-        }
-      })()
-    `;
-
-    // 主要的检查脚本
-    const mainScript = `
-      (function() {
-        try {
-          console.log("Starting data collection...");
-          
-          // 获取所有iframe
-          const frames = Array.from(document.getElementsByTagName('iframe'));
-          console.log("Found frames:", frames.length);
-          frames.forEach(frame => console.log("Frame src:", frame.src));
-          
-          // 获取主页面的存储数据
-          console.log("Getting main page storage...");
-          const mainStorage = {
-            origin: window.location.origin,
-            href: window.location.href,
-            data: {}
-          };
-          
-          try {
-            console.log("SessionStorage available in main page:", !!window.sessionStorage);
-            console.log("SessionStorage length:", window.sessionStorage ? window.sessionStorage.length : 0);
-            
-            const storage = window.sessionStorage;
-            if (storage) {
-              // 列出所有的键
-              const keys = [];
-              for (let i = 0; i < storage.length; i++) {
-                keys.push(storage.key(i));
-              }
-              console.log("Available keys in main page:", keys);
-              
-              // 获取所有值
-              for (let i = 0; i < storage.length; i++) {
-                const key = storage.key(i);
-                try {
-                  mainStorage.data[key] = storage.getItem(key);
-                  console.log("Got value for key in main page:", key);
-                } catch (e) {
-                  console.error("Error getting value for key in main page:", key, e);
-                }
-              }
-            }
-          } catch (e) {
-            console.error("Error accessing main page storage:", e);
-          }
-          
-          console.log("Main page storage:", mainStorage);
-
-          // 收集iframe信息
-          const iframeResults = frames
-            .filter(frame => frame.src)
-            .map(frame => ({
-              frameURL: frame.src,
-              needsEvaluation: true
-            }));
-          
-          return {
-            mainStorage: mainStorage,
-            iframeResults: iframeResults
-          };
-        } catch(e) {
-          console.error("Error in main script:", e);
-          return {
-            mainStorage: { origin: window.location.origin, data: {} },
-            iframeResults: []
-          };
-        }
-      })()
-    `;
-
-    // 执行主脚本
-    chrome.devtools.inspectedWindow.eval(
-      mainScript,
-      async function (result, isException) {
-        if (isException) {
-          console.error("Failed to get storage data:", isException);
-          showStatus("获取存储数据失败: " + isException.value, true);
-          return;
-        }
-
-        console.log("Got initial data:", result);
-
-        // 处理iframe结果
-        const finalResults = [];
-
-        // 添加主页面数据（如果有）
-        if (
-          result &&
-          result.mainStorage &&
-          Object.keys(result.mainStorage.data).length > 0
-        ) {
-          finalResults.push(result.mainStorage);
-        }
-
-        // 处理iframe数据
-        if (result && Array.isArray(result.iframeResults)) {
-          // 对每个iframe执行脚本
-          for (const frame of result.iframeResults) {
-            try {
-              const frameResult = await new Promise((resolve) => {
-                chrome.devtools.inspectedWindow.eval(
-                  iframeScript,
-                  { frameURL: frame.frameURL },
-                  (result, exceptionInfo) => {
-                    if (exceptionInfo) {
-                      console.error(
-                        "Error executing in frame:",
-                        frame.frameURL,
-                        exceptionInfo
-                      );
-                      resolve(null);
-                      return;
-                    }
-                    console.log(
-                      "Frame result for",
-                      frame.frameURL,
-                      ":",
-                      result
-                    );
-                    resolve(result);
-                  }
-                );
-              });
-
-              if (frameResult && Object.keys(frameResult.data).length > 0) {
-                finalResults.push(frameResult);
-              }
-            } catch (e) {
-              console.error("Error evaluating frame:", frame.frameURL, e);
-            }
-          }
-        }
-
-        console.log("Final results:", finalResults);
-        storageList.innerHTML = "";
-
-        if (finalResults.length === 0) {
-          const noDataMsg = document.createElement("div");
-          noDataMsg.style.padding = "10px";
-          noDataMsg.style.color = "#666";
-          noDataMsg.textContent = "没有找到任何会话存储数据";
-          storageList.appendChild(noDataMsg);
-          return;
-        }
-
-        // 创建一个存储所有数据的对象，用于"复制所有"功能
-        const allStorageData = {};
-
-        // 为每个源创建一个部分
-        finalResults.forEach((storage) => {
-          if (storage && storage.origin && storage.data) {
-            console.log("Processing storage from origin:", storage.origin);
-            const section = createStorageSection(storage.origin, storage.data);
-            storageList.appendChild(section);
-
-            // 将此源的数据添加到总数据中
-            Object.assign(allStorageData, storage.data);
-          }
-        });
-
-        if (Object.keys(allStorageData).length === 0) {
-          const noDataMsg = document.createElement("div");
-          noDataMsg.style.padding = "10px";
-          noDataMsg.style.color = "#666";
-          noDataMsg.textContent =
-            "没有找到任何会话存储数据（已尝试访问所有可见的iframe）";
-          storageList.appendChild(noDataMsg);
-          return;
-        }
-
-        // 添加复制所有数据的按钮
-        const copyAllContainer = document.createElement("div");
-        copyAllContainer.style.marginTop = "20px";
-        copyAllContainer.style.textAlign = "center";
-        copyAllContainer.style.padding = "20px";
-        copyAllContainer.style.backgroundColor = "#fff";
-        copyAllContainer.style.borderRadius = "8px";
-        copyAllContainer.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
-
-        const copyAllDataButton = document.createElement("button");
-        copyAllDataButton.textContent = "复制所有源的数据为可执行代码";
-        copyAllDataButton.style.padding = "10px 20px";
-        copyAllDataButton.onclick = () => {
-          copyToClipboard(generateExecutableCode(allStorageData, "所有源"));
-        };
-
-        const executeAllDataButton = document.createElement("button");
-        executeAllDataButton.textContent = "导入所有源的数据";
-        executeAllDataButton.style.padding = "10px 20px";
-        executeAllDataButton.style.marginLeft = "10px";
-        executeAllDataButton.style.backgroundColor = "#4CAF50";
-        executeAllDataButton.onclick = () => {
-          executeCode(allStorageData, "所有源");
-        };
-
-        copyAllContainer.appendChild(copyAllDataButton);
-        copyAllContainer.appendChild(executeAllDataButton);
-        storageList.appendChild(copyAllContainer);
+    results.forEach((result) => {
+      if (!result.result || Object.keys(result.result).length === 0) {
+        return;
       }
-    );
+
+      const frameDiv = document.createElement("div");
+      frameDiv.className = "frame-data";
+
+      // 创建源信息标题
+      const sourceTitle = document.createElement("h3");
+      sourceTitle.textContent =
+        result.frameId === 0 ? "主框架" : `框架 ${result.frameId}`;
+      frameDiv.appendChild(sourceTitle);
+
+      // 创建数据表格
+      const table = document.createElement("table");
+      table.innerHTML = `
+        <tr>
+          <th>键</th>
+          <th>值</th>
+          <th>操作</th>
+        </tr>
+      `;
+
+      // 添加数据行
+      Object.entries(result.result).forEach(([key, value]) => {
+        // 添加到总数据中
+        allStorageData[key] = value;
+
+        const row = document.createElement("tr");
+
+        // 键列
+        const keyCell = document.createElement("td");
+        keyCell.textContent = key;
+        row.appendChild(keyCell);
+
+        // 值列
+        const valueCell = document.createElement("td");
+        valueCell.textContent = value;
+        row.appendChild(valueCell);
+
+        // 操作列
+        const actionCell = document.createElement("td");
+
+        // 复制按钮
+        const copyButton = document.createElement("button");
+        copyButton.textContent = "复制";
+        copyButton.onclick = () => {
+          const code = generateExecutableCode({ [key]: value }, "单个项目");
+          navigator.clipboard.writeText(code);
+          showStatus("代码已复制到剪贴板", "success");
+        };
+        actionCell.appendChild(copyButton);
+
+        // 执行按钮
+        const executeButton = document.createElement("button");
+        executeButton.textContent = "执行";
+        executeButton.onclick = async () => {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              function: (key, value) => {
+                sessionStorage.setItem(key, value);
+              },
+              args: [key, value],
+            });
+            showStatus("数据已成功设置到会话存储", "success");
+          } catch (error) {
+            console.error("执行失败:", error);
+            showStatus("执行失败，请查看控制台了解详情", "error");
+          }
+        };
+        actionCell.appendChild(executeButton);
+
+        // 删除按钮
+        const deleteButton = document.createElement("button");
+        deleteButton.textContent = "删除";
+        deleteButton.onclick = async () => {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              function: (key) => {
+                sessionStorage.removeItem(key);
+              },
+              args: [key],
+            });
+            showStatus(`已删除键 "${key}"`, "success");
+            refreshStorageData(); // 刷新显示
+          } catch (error) {
+            console.error("删除失败:", error);
+            showStatus("删除失败，请查看控制台了解详情", "error");
+          }
+        };
+        actionCell.appendChild(deleteButton);
+
+        row.appendChild(actionCell);
+        table.appendChild(row);
+      });
+
+      frameDiv.appendChild(table);
+      storageList.appendChild(frameDiv);
+    });
+
+    // 添加批量操作按钮
+    if (Object.keys(allStorageData).length > 0) {
+      const batchDiv = document.createElement("div");
+      batchDiv.className = "batch-operations";
+
+      // 复制所有按钮
+      const copyAllButton = document.createElement("button");
+      copyAllButton.textContent = "复制所有会话存储";
+      copyAllButton.onclick = () => {
+        const code = generateExecutableCode(allStorageData, "所有会话存储");
+        navigator.clipboard.writeText(code);
+        showStatus("所有会话存储数据的代码已复制到剪贴板", "success");
+      };
+      batchDiv.appendChild(copyAllButton);
+
+      // 导入所有按钮
+      const importAllButton = document.createElement("button");
+      importAllButton.textContent = "导入所有会话存储";
+      importAllButton.onclick = async () => {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            function: (data) => {
+              Object.entries(data).forEach(([key, value]) => {
+                try {
+                  sessionStorage.setItem(key, value);
+                  console.log("✅ 成功导入:", key);
+                } catch (error) {
+                  console.error("❌ 导入失败:", key, error);
+                }
+              });
+            },
+            args: [allStorageData],
+          });
+          showStatus("所有会话存储数据已导入", "success");
+        } catch (error) {
+          console.error("导入所有数据失败:", error);
+          showStatus("导入失败，请查看控制台了解详情", "error");
+        }
+      };
+      batchDiv.appendChild(importAllButton);
+
+      // 删除所有按钮
+      const deleteAllButton = document.createElement("button");
+      deleteAllButton.textContent = "删除所有会话存储";
+      deleteAllButton.onclick = async () => {
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            function: () => {
+              sessionStorage.clear();
+            },
+          });
+          showStatus("所有会话存储数据已删除", "success");
+          refreshStorageData(); // 刷新显示
+        } catch (error) {
+          console.error("删除所有数据失败:", error);
+          showStatus("删除失败，请查看控制台了解详情", "error");
+        }
+      };
+      batchDiv.appendChild(deleteAllButton);
+
+      storageList.appendChild(batchDiv);
+    }
   }
 
-  refreshBtn.addEventListener("click", function () {
-    console.log("Refresh button clicked");
-    refreshStorageData();
-  });
+  // 显示Cookie数据的函数
+  async function displayCookieData(tab) {
+    try {
+      const url = new URL(tab.url);
+      const cookies = await chrome.cookies.getAll({ domain: url.hostname });
+
+      if (!cookies || cookies.length === 0) {
+        const noDataDiv = document.createElement("div");
+        noDataDiv.textContent = "没有Cookie数据";
+        storageList.appendChild(noDataDiv);
+        return;
+      }
+
+      // 创建数据表格
+      const table = document.createElement("table");
+      table.innerHTML = `
+        <tr>
+          <th>名称</th>
+          <th>值</th>
+          <th>域</th>
+          <th>路径</th>
+          <th>过期时间</th>
+          <th>操作</th>
+        </tr>
+      `;
+
+      // 添加数据行
+      cookies.forEach((cookie) => {
+        const row = document.createElement("tr");
+
+        // 添加cookie信息列
+        const addCell = (content) => {
+          const cell = document.createElement("td");
+          cell.textContent = content;
+          row.appendChild(cell);
+        };
+
+        addCell(cookie.name);
+        addCell(cookie.value);
+        addCell(cookie.domain);
+        addCell(cookie.path);
+        addCell(
+          cookie.expirationDate
+            ? new Date(cookie.expirationDate * 1000).toLocaleString()
+            : "会话结束时"
+        );
+
+        // 操作列
+        const actionCell = document.createElement("td");
+
+        // 复制按钮
+        const copyButton = document.createElement("button");
+        copyButton.textContent = "复制";
+        copyButton.onclick = () => {
+          const cookieCode = `
+            chrome.cookies.set({
+              url: "${tab.url}",
+              name: "${cookie.name}",
+              value: "${cookie.value}",
+              domain: "${cookie.domain}",
+              path: "${cookie.path}",
+              secure: ${cookie.secure},
+              httpOnly: ${cookie.httpOnly},
+              sameSite: "${cookie.sameSite}",
+              ${
+                cookie.expirationDate
+                  ? `expirationDate: ${cookie.expirationDate},`
+                  : ""
+              }
+            });
+          `;
+          navigator.clipboard.writeText(cookieCode);
+          showStatus("Cookie代码已复制到剪贴板");
+        };
+        actionCell.appendChild(copyButton);
+
+        // 删除按钮
+        const deleteButton = document.createElement("button");
+        deleteButton.textContent = "删除";
+        deleteButton.onclick = async () => {
+          try {
+            await chrome.cookies.remove({
+              url: tab.url,
+              name: cookie.name,
+            });
+            showStatus(`Cookie "${cookie.name}" 已删除`);
+            refreshStorageData(); // 刷新显示
+          } catch (error) {
+            console.error("删除Cookie失败:", error);
+            showStatus("删除Cookie失败，请查看控制台了解详情", "error");
+          }
+        };
+        actionCell.appendChild(deleteButton);
+
+        row.appendChild(actionCell);
+        table.appendChild(row);
+      });
+
+      // 添加批量操作按钮
+      const batchDiv = document.createElement("div");
+      batchDiv.className = "batch-operations";
+
+      // 复制所有按钮
+      const copyAllButton = document.createElement("button");
+      copyAllButton.textContent = "复制所有Cookie";
+      copyAllButton.onclick = () => {
+        const cookiesCode = cookies
+          .map(
+            (cookie) => `
+          chrome.cookies.set({
+            url: "${tab.url}",
+            name: "${cookie.name}",
+            value: "${cookie.value}",
+            domain: "${cookie.domain}",
+            path: "${cookie.path}",
+            secure: ${cookie.secure},
+            httpOnly: ${cookie.httpOnly},
+            sameSite: "${cookie.sameSite}",
+            ${
+              cookie.expirationDate
+                ? `expirationDate: ${cookie.expirationDate},`
+                : ""
+            }
+          });
+        `
+          )
+          .join("\n");
+        navigator.clipboard.writeText(cookiesCode);
+        showStatus("所有Cookie代码已复制到剪贴板");
+      };
+      batchDiv.appendChild(copyAllButton);
+
+      // 删除所有按钮
+      const deleteAllButton = document.createElement("button");
+      deleteAllButton.textContent = "删除所有Cookie";
+      deleteAllButton.onclick = async () => {
+        try {
+          for (const cookie of cookies) {
+            await chrome.cookies.remove({
+              url: tab.url,
+              name: cookie.name,
+            });
+          }
+          showStatus("所有Cookie已删除");
+          refreshStorageData(); // 刷新显示
+        } catch (error) {
+          console.error("删除所有Cookie失败:", error);
+          showStatus("删除Cookie失败，请查看控制台了解详情", "error");
+        }
+      };
+      batchDiv.appendChild(deleteAllButton);
+
+      storageList.appendChild(table);
+      storageList.appendChild(batchDiv);
+    } catch (error) {
+      console.error("显示Cookie数据失败:", error);
+      showStatus("显示Cookie数据失败，请查看控制台了解详情", "error");
+    }
+  }
+
+  // 添加刷新按钮事件监听器
+  refreshBtn.addEventListener("click", refreshStorageData);
 
   // 初始加载数据
   console.log("Initial data load");
   refreshStorageData();
 });
+
+// 获取会话存储数据的函数
+function getSessionStorageData() {
+  const data = {};
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i);
+    data[key] = sessionStorage.getItem(key);
+  }
+  return data;
+}
